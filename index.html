@@ -151,6 +151,8 @@
             payments: renderPayments,
             reports: renderReports,
             ledger: renderLedger, // New tab for ledger search
+            receivables: renderReceivables,
+            payables: renderPayables,
         }[tab];
         if (renderer) renderer(data, id);
     }
@@ -188,8 +190,8 @@
           <div class="clickable" onclick="redirect('sales')" style="flex:1;min-width:200px;padding:16px;border-radius:10px;background:#eef8f7"><div class="small">Total Sales</div><div class="bold" style="font-size:24px;">₹ ${fmt(totalSales)}</div></div>
           <div class="clickable" onclick="redirect('purchases')" style="flex:1;min-width:200px;padding:16px;border-radius:10px;background:#f0fdf4"><div class="small">Total Purchases</div><div class="bold" style="font-size:24px;">₹ ${fmt(totalPurchases)}</div></div>
           <div style="flex:1;min-width:200px;padding:16px;border-radius:10px;background:#e7f0ff"><div class="small">Profit</div><div class="bold" style="font-size:24px;">₹ ${fmt(profit)}</div></div>
-          <div style="flex:1;min-width:200px;padding:16px;border-radius:10px;background:#fff7ed"><div class="small">Receivables</div><div class="bold" style="font-size:24px;">₹ ${fmt(receivables)}</div></div>
-          <div style="flex:1;min-width:200px;padding:16px;border-radius:10px;background:#fff1f2"><div class="small">Payables</div><div class="bold" style="font-size:24px;">₹ ${fmt(payables)}</div></div>
+          <div class="clickable" onclick="redirect('receivables')" style="flex:1;min-width:200px;padding:16px;border-radius:10px;background:#fff7ed"><div class="small">Receivables</div><div class="bold" style="font-size:24px;">₹ ${fmt(receivables)}</div></div>
+          <div class="clickable" onclick="redirect('payables')" style="flex:1;min-width:200px;padding:16px;border-radius:10px;background:#fff1f2"><div class="small">Payables</div><div class="bold" style="font-size:24px;">₹ ${fmt(payables)}</div></div>
         </div>
         <div class="card">
           <h3 style="margin-top:0">Low Stock Alerts</h3>
@@ -720,16 +722,6 @@
     
     // ========== RENDER: LEDGER SEARCH ==========
     function renderLedger({ sales, purchases, payments, customers, suppliers }) {
-        // Combine all transactions into a single ledger list
-        const ledger = [
-            ...sales.map(s => ({ ...s, type: 'Sale', date: s.date, total: s.total, contactId: s.customerId })),
-            ...purchases.map(p => ({ ...p, type: 'Purchase', date: p.date, total: p.total, contactId: p.supplierId })),
-            ...payments.map(pm => ({ ...pm, type: pm.type, total: pm.amount, contactId: pm.refType === 'sale' ? sales.find(s => s.id === pm.refId)?.customerId : purchases.find(p => p.id === pm.refId)?.supplierId }))
-        ];
-        
-        // Sort ledger by date in descending order
-        ledger.sort((a, b) => new Date(b.date) - new Date(a.date));
-
         const getContactName = (id) => {
             const customer = customers.find(c => c.id === id);
             if (customer) return customer.name;
@@ -738,11 +730,24 @@
             return 'N/A';
         };
 
+        const createLedger = () => {
+            const ledger = [
+                ...sales.map(s => ({ ...s, type: 'Sale', date: s.date, total: s.total, contactId: s.customerId })),
+                ...purchases.map(p => ({ ...p, type: 'Purchase', date: p.date, total: p.total, contactId: p.supplierId })),
+                ...payments.map(pm => ({ ...pm, type: pm.type, total: pm.amount, contactId: pm.refType === 'sale' ? sales.find(s => s.id === pm.refId)?.customerId : purchases.find(p => p.id === pm.refId)?.supplierId }))
+            ];
+            ledger.sort((a, b) => new Date(b.date) - new Date(a.date));
+            return ledger;
+        };
+        
         main.innerHTML = `
             <h2>Ledger Search</h2>
             <div class="card">
+                <div class="row">
+                    <div style="flex:1"><label>Search by Contact Name</label><input type="text" id="ledger-search" placeholder="e.g., Jane Doe"/></div>
+                </div>
                 <h3>Transaction History</h3>
-                <table>
+                <table id="ledger-table">
                     <thead>
                         <tr>
                             <th>Date</th>
@@ -751,15 +756,105 @@
                             <th class="right">Amount</th>
                         </tr>
                     </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        `;
+
+        const searchInput = document.getElementById('ledger-search');
+        const ledgerTableBody = document.getElementById('ledger-table').querySelector('tbody');
+
+        const renderLedgerTable = (query = '') => {
+            const allLedger = createLedger();
+            const filteredLedger = query.trim()
+                ? allLedger.filter(item => getContactName(item.contactId).toLowerCase().includes(query.toLowerCase()))
+                : allLedger;
+
+            ledgerTableBody.innerHTML = filteredLedger.map(item => `
+                <tr>
+                    <td>${item.date}</td>
+                    <td>${item.type}</td>
+                    <td>${getContactName(item.contactId)}</td>
+                    <td class="right">₹ ${fmt(item.total)}</td>
+                </tr>
+            `).join('');
+        };
+        
+        // Initial render
+        renderLedgerTable();
+
+        // Add event listener for live search
+        searchInput.addEventListener('input', (e) => {
+            renderLedgerTable(e.target.value);
+        });
+    }
+
+    function renderReceivables({ sales, customers }) {
+        const receivables = sales.filter(s => (s.total || 0) > (s.paid || 0));
+        main.innerHTML = `
+            <h2>Receivables</h2>
+            <div class="card">
+                <h3>Outstanding Invoices</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Invoice #</th>
+                            <th>Customer</th>
+                            <th class="right">Total</th>
+                            <th class="right">Paid</th>
+                            <th class="right">Due</th>
+                        </tr>
+                    </thead>
                     <tbody>
-                        ${ledger.map(item => `
-                            <tr>
-                                <td>${item.date}</td>
-                                <td>${item.type}</td>
-                                <td>${getContactName(item.contactId)}</td>
-                                <td class="right">₹ ${fmt(item.total)}</td>
-                            </tr>
-                        `).join('')}
+                        ${receivables.map(s => {
+                            const cust = customers.find(c => c.id === s.customerId)?.name || 'N/A';
+                            const due = (s.total || 0) - (s.paid || 0);
+                            return `<tr>
+                                <td>${s.date}</td>
+                                <td>${s.invoice}</td>
+                                <td>${cust}</td>
+                                <td class="right">₹ ${fmt(s.total)}</td>
+                                <td class="right">₹ ${fmt(s.paid)}</td>
+                                <td class="right" style="color:#ef4444">₹ ${fmt(due)}</td>
+                            </tr>`;
+                        }).join('')}
+                    </tbody>
+                </table>
+            </div>
+        `;
+    }
+
+    function renderPayables({ purchases, suppliers }) {
+        const payables = purchases.filter(p => (p.total || 0) > (p.paid || 0));
+        main.innerHTML = `
+            <h2>Payables</h2>
+            <div class="card">
+                <h3>Outstanding Bills</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Bill #</th>
+                            <th>Supplier</th>
+                            <th class="right">Total</th>
+                            <th class="right">Paid</th>
+                            <th class="right">Due</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${payables.map(p => {
+                            const sup = suppliers.find(s => s.id === p.supplierId)?.name || 'N/A';
+                            const due = (p.total || 0) - (p.paid || 0);
+                            return `<tr>
+                                <td>${p.date}</td>
+                                <td>${p.bill}</td>
+                                <td>${sup}</td>
+                                <td class="right">₹ ${fmt(p.total)}</td>
+                                <td class="right">₹ ${fmt(p.paid)}</td>
+                                <td class="right" style="color:#ef4444">₹ ${fmt(due)}</td>
+                            </tr>`;
+                        }).join('')}
                     </tbody>
                 </table>
             </div>
