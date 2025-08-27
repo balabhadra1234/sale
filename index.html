@@ -732,11 +732,19 @@
 
         const createLedger = () => {
             const ledger = [
-                ...sales.map(s => ({ ...s, type: 'Sale', date: s.date, total: s.total, contactId: s.customerId })),
-                ...purchases.map(p => ({ ...p, type: 'Purchase', date: p.date, total: p.total, contactId: p.supplierId })),
-                ...payments.map(pm => ({ ...pm, type: pm.type, total: pm.amount, contactId: pm.refType === 'sale' ? sales.find(s => s.id === pm.refId)?.customerId : purchases.find(p => p.id === pm.refId)?.supplierId }))
+                ...sales.map(s => ({ type: 'Sale', date: s.date, credit: s.total, debit: s.paid, contactId: s.customerId, note: `Invoice #${s.invoice}`})),
+                ...purchases.map(p => ({ type: 'Purchase', date: p.date, credit: p.paid, debit: p.total, contactId: p.supplierId, note: `Bill #${p.bill}` })),
+                ...payments.map(pm => {
+                    let contactId;
+                    if (pm.refType === 'sale') {
+                        contactId = sales.find(s => s.id === pm.refId)?.customerId;
+                    } else if (pm.refType === 'purchase') {
+                        contactId = purchases.find(p => p.id === pm.refId)?.supplierId;
+                    }
+                    return { type: pm.type, date: pm.date, credit: pm.type === 'receipt' ? pm.amount : 0, debit: pm.type === 'payment' ? pm.amount : 0, contactId: contactId, note: `Payment/Receipt via ${pm.method}` };
+                })
             ];
-            ledger.sort((a, b) => new Date(b.date) - new Date(a.date));
+            ledger.sort((a, b) => new Date(a.date) - new Date(b.date));
             return ledger;
         };
         
@@ -744,46 +752,65 @@
             <h2>Ledger Search</h2>
             <div class="card">
                 <div class="row">
-                    <div style="flex:1"><label>Search by Contact Name</label><input type="text" id="ledger-search" placeholder="e.g., Jane Doe"/></div>
+                    <div style="flex:1">
+                        <label>Search by Contact Name</label>
+                        <input type="text" id="ledger-search" placeholder="e.g., Jane Doe"/>
+                    </div>
                 </div>
-                <h3>Transaction History</h3>
-                <table id="ledger-table">
+            </div>
+            <div class="card">
+                <div class="row" style="justify-content:space-between;">
+                    <span class="small">Opening Balance: <b id="opening-balance">₹ 0.00</b></span>
+                    <span class="small">Closing Balance: <b id="closing-balance">₹ 0.00</b></span>
+                </div>
+                <table>
                     <thead>
                         <tr>
                             <th>Date</th>
-                            <th>Type</th>
-                            <th>Contact</th>
-                            <th class="right">Amount</th>
+                            <th>Description</th>
+                            <th class="right">Debit</th>
+                            <th class="right">Credit</th>
+                            <th class="right">Balance</th>
                         </tr>
                     </thead>
-                    <tbody></tbody>
+                    <tbody id="ledger-table-body"></tbody>
                 </table>
             </div>
         `;
 
         const searchInput = document.getElementById('ledger-search');
-        const ledgerTableBody = document.getElementById('ledger-table').querySelector('tbody');
+        const ledgerTableBody = document.getElementById('ledger-table-body');
+        const openingBalanceEl = document.getElementById('opening-balance');
+        const closingBalanceEl = document.getElementById('closing-balance');
 
         const renderLedgerTable = (query = '') => {
             const allLedger = createLedger();
-            const filteredLedger = query.trim()
-                ? allLedger.filter(item => getContactName(item.contactId).toLowerCase().includes(query.toLowerCase()))
-                : allLedger;
+            const filteredLedger = allLedger.filter(item => getContactName(item.contactId).toLowerCase().includes(query.toLowerCase()));
+            
+            let balance = 0;
+            const tableRows = filteredLedger.map(item => {
+                // Accounting rule: Debit increases asset/expense, Credit decreases asset/expense
+                // In our case: Sales (receivables) increase balance (Debit), Payments/Purchases decrease it (Credit)
+                // Let's simplify: A positive balance means money is owed to us.
+                balance += (item.credit || 0) - (item.debit || 0);
 
-            ledgerTableBody.innerHTML = filteredLedger.map(item => `
-                <tr>
-                    <td>${item.date}</td>
-                    <td>${item.type}</td>
-                    <td>${getContactName(item.contactId)}</td>
-                    <td class="right">₹ ${fmt(item.total)}</td>
-                </tr>
-            `).join('');
+                return `
+                    <tr>
+                        <td>${item.date}</td>
+                        <td>${item.note || item.type}</td>
+                        <td class="right">₹ ${fmt(item.debit)}</td>
+                        <td class="right">₹ ${fmt(item.credit)}</td>
+                        <td class="right">₹ ${fmt(balance)}</td>
+                    </tr>
+                `;
+            }).join('');
+            
+            ledgerTableBody.innerHTML = tableRows;
+            openingBalanceEl.textContent = `₹ ${fmt(0)}`; // Starting from 0 for the filtered view
+            closingBalanceEl.textContent = `₹ ${fmt(balance)}`;
         };
         
-        // Initial render
         renderLedgerTable();
-
-        // Add event listener for live search
         searchInput.addEventListener('input', (e) => {
             renderLedgerTable(e.target.value);
         });
