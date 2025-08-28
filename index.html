@@ -41,6 +41,27 @@
         .modal-content { background: var(--card-bg); padding: 24px; border-radius: 12px; max-width: 400px; width: 90%; text-align: center; }
         .modal-buttons { display: flex; justify-content: space-between; gap: 8px; margin-top: 16px; }
         .toast-message { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background-color: rgba(0, 0, 0, 0.7); color: white; padding: 12px 20px; border-radius: 8px; z-index: 2000; opacity: 0; transition: opacity 0.3s ease; }
+        .stat-card {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            padding: 24px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, var(--card-bg) 0%, #f0f0f0 100%);
+            box-shadow: 0 8px 16px -4px rgba(0,0,0,0.1), 0 4px 6px -2px rgba(0,0,0,0.06);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 12px 24px -6px rgba(0,0,0,0.15), 0 6px 12px -3px rgba(0,0,0,0.1);
+        }
+        .stat-card .icon { font-size: 2rem; margin-bottom: 8px; color: var(--accent); }
+        .stat-card .value { font-size: 2.25rem; font-weight: 700; }
+        .stat-card .label { font-size: 0.9rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+        .error-message { text-align: center; padding: 20px; color: #ef4444; font-weight: bold; }
+        .loader { border: 4px solid #f3f3f3; border-top: 4px solid var(--accent); border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
@@ -63,8 +84,12 @@
         </div>
     </header>
     <main>
-        <nav id="navbar"></nav>
-        <div id="app-container"></div>
+        <div id="status-message" class="text-center p-4">
+            <div id="loader" class="loader mx-auto"></div>
+            <p id="status-text" class="mt-2 text-gray-500">Connecting to Firebase...</p>
+        </div>
+        <nav id="navbar" class="hidden"></nav>
+        <div id="app-container" class="hidden"></div>
     </main>
     <div id="modal-container"></div>
     <div id="toast" class="toast-message"></div>
@@ -117,6 +142,37 @@
                 modalContainer.innerHTML = '';
             };
         };
+        const showStatus = (message, isLoading = true, isError = false) => {
+            const statusContainer = document.getElementById('status-message');
+            const loader = document.getElementById('loader');
+            const statusText = document.getElementById('status-text');
+            const appContainer = document.getElementById('app-container');
+            const navbar = document.getElementById('navbar');
+
+            statusText.textContent = message;
+            statusContainer.style.display = 'block';
+
+            if (isLoading) {
+                loader.style.display = 'block';
+                statusText.style.color = '#6b7280';
+            } else {
+                loader.style.display = 'none';
+                if (isError) {
+                    statusText.style.color = '#ef4444';
+                } else {
+                    statusText.style.color = '#2b7a78';
+                }
+            }
+
+            if (isLoading || isError) {
+                appContainer.classList.add('hidden');
+                navbar.classList.add('hidden');
+            } else {
+                appContainer.classList.remove('hidden');
+                navbar.classList.remove('hidden');
+                statusContainer.style.display = 'none';
+            }
+        };
 
         // ========== FIREBASE SETUP & DATA HANDLING ==========
         const DATA_DOC_PATH = (uid) => `artifacts/${appId}/users/${uid}/appData/data`;
@@ -127,6 +183,7 @@
          */
         const initFirebase = async () => {
             try {
+                showStatus("Connecting to Firebase...");
                 const app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
@@ -135,20 +192,23 @@
                     if (user) {
                         userId = user.uid;
                         document.getElementById('user-info').textContent = `User ID: ${userId}`;
-                        // Start listening to the data for the authenticated user
                         startFirestoreListener();
                     } else {
-                        // Sign in with custom token or anonymously if it's not available
-                        if (initialAuthToken) {
-                            await signInWithCustomToken(auth, initialAuthToken);
-                        } else {
-                            await signInAnonymously(auth);
+                        try {
+                            if (initialAuthToken) {
+                                await signInWithCustomToken(auth, initialAuthToken);
+                            } else {
+                                await signInAnonymously(auth);
+                            }
+                        } catch (e) {
+                            console.error("Authentication failed:", e);
+                            showStatus("Authentication failed. Please try again.", false, true);
                         }
                     }
                 });
             } catch (error) {
                 console.error("Firebase Initialization Error:", error);
-                showToast("Failed to initialize app. Check console for details.");
+                showStatus("Failed to initialize app. Check the console for details.", false, true);
             }
         };
 
@@ -156,20 +216,16 @@
          * Sets up a real-time listener for the user's data in Firestore.
          */
         const startFirestoreListener = () => {
-            // Unsubscribe from any previous listener to avoid duplicates
             if (unsubscribe) {
                 unsubscribe();
             }
 
             const docRef = doc(db, DATA_DOC_PATH(userId));
             unsubscribe = onSnapshot(docRef, (docSnap) => {
+                showStatus("Data synced!", false, false);
                 if (docSnap.exists()) {
-                    // Update the local data object with the fetched data
                     data = docSnap.data();
-                    console.log("Data loaded from Firestore:", data);
                 } else {
-                    // If the document doesn't exist, create it with initial empty arrays
-                    console.log("No data found for user. Initializing...");
                     setDoc(doc(db, DATA_DOC_PATH(userId)), {
                         sales: [],
                         purchases: [],
@@ -177,18 +233,13 @@
                         suppliers: []
                     }).catch(err => console.error("Error initializing data:", err));
                 }
-                // Re-render the UI with the latest data
                 render(activePage);
             }, (error) => {
                 console.error("Error getting Firestore data:", error);
-                showToast("Failed to fetch data from the cloud.");
+                showStatus("Failed to fetch data from the cloud.", false, true);
             });
         };
 
-        /**
-         * Saves the data object back to Firestore.
-         * This function is debounced to prevent too many writes.
-         */
         let saveTimeout;
         const saveData = () => {
             clearTimeout(saveTimeout);
@@ -197,13 +248,12 @@
                     try {
                         const docRef = doc(db, DATA_DOC_PATH(userId));
                         await setDoc(docRef, data, { merge: true });
-                        console.log("Data successfully saved to Firestore!");
                     } catch (e) {
                         console.error("Error writing document: ", e);
                         showToast("Error saving data to the cloud.");
                     }
                 }
-            }, 500); // Wait 500ms before saving
+            }, 500);
         };
 
         // ========== EXPORT/IMPORT FUNCTIONS ==========
@@ -249,7 +299,7 @@
                         }
                         await setDoc(doc(db, DATA_DOC_PATH(userId)), importedData);
                         showToast('Data successfully imported!');
-                        render(activePage); // Re-render with new data
+                        render(activePage);
                     } catch (err) {
                         showToast('Import failed: Could not parse the file.');
                         console.error(err);
@@ -283,7 +333,6 @@
 
             if (pages[page]) {
                 appContainer.innerHTML = pages[page]();
-                // Add event listeners for form submissions and delete actions
                 const form = appContainer.querySelector('form');
                 if (form) {
                     form.onsubmit = (e) => {
@@ -295,8 +344,6 @@
                             newEntry.total = parseFloat(newEntry.total) || 0;
                             newEntry.paid = parseFloat(newEntry.paid) || 0;
                         }
-
-                        // Add a unique ID for each new entry
                         newEntry.id = Date.now().toString();
 
                         data[page].push(newEntry);
@@ -313,28 +360,46 @@
             const totalPurchases = data.purchases.reduce((sum, p) => sum + (parseFloat(p.total) || 0), 0);
             const totalReceivables = data.sales.reduce((sum, s) => sum + ((parseFloat(s.total) || 0) - (parseFloat(s.paid) || 0)), 0);
             const totalPayables = data.purchases.reduce((sum, p) => sum + ((parseFloat(p.total) || 0) - (parseFloat(p.paid) || 0)), 0);
+            const netProfit = totalSales - totalPurchases;
 
             const recentSales = [...data.sales].slice(-5).reverse();
             const recentPurchases = [...data.purchases].slice(-5).reverse();
 
             return `
                 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
-                    <div class="card">
-                        <h3 class="text-lg font-semibold mb-2">Total Sales</h3>
-                        <p class="text-3xl font-bold text-accent">₹ ${fmt(totalSales)}</p>
+                    <div class="stat-card">
+                        <div class="icon text-green-500">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
+                        </div>
+                        <div class="value text-green-600">₹ ${fmt(totalSales)}</div>
+                        <div class="label">Total Sales</div>
                     </div>
-                    <div class="card">
-                        <h3 class="text-lg font-semibold mb-2">Total Purchases</h3>
-                        <p class="text-3xl font-bold text-accent">₹ ${fmt(totalPurchases)}</p>
+                    <div class="stat-card">
+                        <div class="icon text-red-500">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
+                        </div>
+                        <div class="value text-red-600">₹ ${fmt(totalPurchases)}</div>
+                        <div class="label">Total Purchases</div>
                     </div>
-                    <div class="card">
-                        <h3 class="text-lg font-semibold mb-2">Receivables</h3>
-                        <p class="text-3xl font-bold text-red-500">₹ ${fmt(totalReceivables)}</p>
+                    <div class="stat-card">
+                        <div class="icon text-blue-500">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
+                        </div>
+                        <div class="value text-blue-600">₹ ${fmt(totalReceivables)}</div>
+                        <div class="label">Total Receivables</div>
                     </div>
-                    <div class="card">
-                        <h3 class="text-lg font-semibold mb-2">Payables</h3>
-                        <p class="text-3xl font-bold text-red-500">₹ ${fmt(totalPayables)}</p>
+                    <div class="stat-card">
+                        <div class="icon text-purple-500">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
+                        </div>
+                        <div class="value text-purple-600">₹ ${fmt(totalPayables)}</div>
+                        <div class="label">Total Payables</div>
                     </div>
+                </div>
+                
+                <div class="card mb-4">
+                    <h3 class="text-2xl font-semibold mb-2 text-center">Net Profit</h3>
+                    <p class="text-5xl font-extrabold text-center ${netProfit >= 0 ? 'text-green-600' : 'text-red-600'}">₹ ${fmt(netProfit)}</p>
                 </div>
 
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -653,22 +718,16 @@
             const currentTheme = document.documentElement.getAttribute('data-theme');
             const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
             document.documentElement.setAttribute('data-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
         };
 
         // ========== APP INITIALIZATION ==========
         (function init() {
-            // Restore theme from local storage
             if (localStorage.getItem('theme') === 'dark') {
                 document.documentElement.setAttribute('data-theme', 'dark');
             } else {
                 document.documentElement.setAttribute('data-theme', 'light');
             }
-            themeToggle.onclick = () => {
-                const newTheme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-                document.documentElement.setAttribute('data-theme', newTheme);
-                localStorage.setItem('theme', newTheme);
-            };
-
             initFirebase();
         })();
     </script>
